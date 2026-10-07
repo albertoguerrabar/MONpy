@@ -28,13 +28,13 @@ LOGO = r"""
 INFO_BLOCK = """
  *******************************************************
  *               Alberto Guerra-Barroso                *
- *    Lab of Computational and Theoretical Chemistry   *
- *      Faculty of Chemistry,University of Havana      *
+ *                  Dept of Chemistry                  *
+ *           Faculty of Exact Sciences, UNAB           *
  *                                                     *
  *                        and                          *
  *                                                     *
  *              Ana Lilian Montero-Alejo               *
- *          Department of Physics, FCNMM, UTEM         *
+ *            Dept of Physics, FCNMM, UTEM             *
  *******************************************************
 """
 
