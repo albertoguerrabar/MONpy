@@ -65,7 +65,7 @@ def _formatear_analisis(info: dict, nombres: list) -> str:
     f1, f2 = info['par_dominante']
     lineas.append(f"  Par dominante: {f1} -> {f2}   "
                   f"T = {info['T_dominante']:+.4f}")
-    lineas.append("  Delta Q por fragmento (heurístico, suma 0):")
+    lineas.append("  Delta Q por fragmento (heuristico, suma 0):")
     for k, nf in enumerate(nombres):
         lineas.append(f"      {nf:10s}  dQ = {info['dQ'][k]:+8.4f}")
     return "\n".join(lineas)
@@ -161,13 +161,26 @@ def main():
             print("Invalid input.")
             return
 
+    # --- Esquema de reducción a fragmentos ---
+    op_esq = _pedir_opcion(
+        "\nFragment reduction scheme:",
+        {
+            "1": "Signed      W_F,i = Sum C_mu,i       (riguroso, con fase)",
+            "2": "Population  W_F,i = sqrt(Sum C^2)    (Mulliken, enfasis CT)",
+            "3": "AbsSum      W_F,i = Sum |C_mu,i|     (sin cancelacion)",
+        },
+        default="2",
+    )
+    esquema_map = {"1": "signed", "2": "population", "3": "abs_sum"}
+    esquema = esquema_map[op_esq]
+
     # --- Normalización numérica de la TDM ---
     op_norm = _pedir_opcion(
         "\nTDM numerical normalization:",
         {
             "1": "Frobenius   T / ||T||_F      (comparable entre estados)",
-            "2": "MaxAbs      T / max|T|       (máximo = ±1, preserva signo)",
-            "3": "SumaAbs     T / Σ|T|         (fracciones L1)",
+            "2": "MaxAbs      T / max|T|       (maximo = +/-1, preserva signo)",
+            "3": "SumaAbs     T / Sum|T|       (fracciones L1)",
             "4": "None        sin normalizar (raw)",
         },
         default="1",
@@ -185,7 +198,7 @@ def main():
         "\nPlot modes to generate:",
         {
             "1": "Signed only            (T, colorbar [-V, +V])",
-            "2": "Magnitude only         (|T|, colorbar [0, 1])",
+            "2": "Magnitude only         (|T|, colorbar [0, V])",
             "3": "Probability only       (|T|^2 / sum, colorbar [0, 1])",
             "4": "Both signed + magnitude",
             "5": "All three modes",
@@ -210,7 +223,9 @@ def main():
         print(f"  {etiqueta}  (E = {estado.energia_eV:.3f} eV)...")
         try:
             M = tdm_fragmentos(
-                ndol, estado, frag_ao_idx, normalizar=normalizacion,
+                ndol, estado, frag_ao_idx,
+                normalizar=normalizacion,
+                esquema=esquema,
             )
             info = analizar_tdm(M, nombres_frag)
             resultados.append((estado, spin, M, info))
@@ -218,24 +233,91 @@ def main():
             print(f"    ERROR: {e}")
             resultados.append((estado, spin, None, None))
 
-    # --- Vmax global por modo de ploteo ---
+    # --- Estadísticas de distribución por modo ---
     matrices_validas = [M for _, _, M, _ in resultados if M is not None]
 
-    vmax_por_modo = {}
+    stats_por_modo = {}
     for modo in modos:
         if not matrices_validas:
-            vmax_por_modo[modo] = 1.0
+            stats_por_modo[modo] = {}
             continue
         transformed = [preparar_matriz_para_plot(M, modo)
                        for M in matrices_validas]
+        flat = np.concatenate([x.ravel() for x in transformed])
         if modo == "signed":
-            vmax = max(float(np.abs(x).max()) for x in transformed)
+            abs_flat = np.abs(flat)
+            stats = {
+                'max_abs': float(abs_flat.max()),
+                'p99': float(np.percentile(abs_flat, 99)),
+                'p95': float(np.percentile(abs_flat, 95)),
+                'p90': float(np.percentile(abs_flat, 90)),
+                'p50': float(np.percentile(abs_flat, 50)),
+            }
         else:
-            vmax = max(float(x.max()) for x in transformed)
-        vmax_por_modo[modo] = max(vmax, 1e-12)
+            stats = {
+                'max': float(flat.max()),
+                'p99': float(np.percentile(flat, 99)),
+                'p95': float(np.percentile(flat, 95)),
+                'p90': float(np.percentile(flat, 90)),
+                'p50': float(np.percentile(flat, 50)),
+            }
+        stats_por_modo[modo] = stats
 
-    print("\nGlobal color scales:")
-    for modo, v in vmax_por_modo.items():
+    print("\nDistribution of |T| values across all selected states:")
+    for modo in modos:
+        s = stats_por_modo[modo]
+        if not s:
+            continue
+        print(f"\n  [{modo}]")
+        if modo == "signed":
+            print(f"    max |T|  = {s['max_abs']:.6f}")
+        else:
+            print(f"    max T    = {s['max']:.6f}")
+        print(f"    P99      = {s['p99']:.6f}")
+        print(f"    P95      = {s['p95']:.6f}")
+        print(f"    P90      = {s['p90']:.6f}")
+        print(f"    P50      = {s['p50']:.6f}")
+
+    # --- Elegir escala de color ---
+    op_escala = _pedir_opcion(
+        "\nColor scale to use in the heatmaps:",
+        {
+            "1": "Auto        (vmax = max|T|; rango completo)",
+            "2": "Percentile  (vmax = P99; satura outliers)",
+            "3": "Percentile  (vmax = P95; satura mas)",
+            "4": "Percentile  (vmax = P90; satura mucho)",
+            "5": "Manual      (escribes el vmax tu)",
+        },
+        default="1",
+    )
+
+    vmax_final_por_modo = {}
+    for modo in modos:
+        s = stats_por_modo[modo]
+        if not s:
+            vmax_final_por_modo[modo] = 1.0
+            continue
+        key_max = 'max_abs' if modo == "signed" else 'max'
+        if op_escala == "2":
+            vmax_final_por_modo[modo] = s['p99']
+        elif op_escala == "3":
+            vmax_final_por_modo[modo] = s['p95']
+        elif op_escala == "4":
+            vmax_final_por_modo[modo] = s['p90']
+        elif op_escala == "5":
+            try:
+                v = float(input(
+                    f"  vmax for [{modo}] "
+                    f"(default {s[key_max]:.6f}): "
+                ).strip() or s[key_max])
+            except ValueError:
+                v = s[key_max]
+            vmax_final_por_modo[modo] = max(v, 1e-12)
+        else:
+            vmax_final_por_modo[modo] = s[key_max]
+
+    print("\nFinal color scales:")
+    for modo, v in vmax_final_por_modo.items():
         if modo == "signed":
             print(f"  {modo:12s}  +/- {v:.6f}")
         else:
@@ -254,8 +336,15 @@ def main():
         buf.append(f"Valence orbitals: {ndol.n_valencia_mo} "
                    f"({ndol.n_ocupados} occupied)\n")
     buf.append(f"Fragments: {', '.join(nombres_frag)}\n")
+    buf.append(f"Fragment scheme: {esquema}\n")
     buf.append(f"Numerical normalization: {normalizacion}\n")
     buf.append(f"Plot modes: {', '.join(modos)}\n")
+    buf.append("Color scales:\n")
+    for modo, v in vmax_final_por_modo.items():
+        if modo == "signed":
+            buf.append(f"  {modo}: +/- {v:.6f}\n")
+        else:
+            buf.append(f"  {modo}: [0, {v:.6f}]\n")
     buf.append("-" * 60 + "\n")
 
     for estado, spin, M, info in resultados:
@@ -278,8 +367,9 @@ def main():
         print(analisis_txt)
 
         # --- Matriz completa en texto ---
-        buf.append("\nTransition Density Matrix (numerical normalization "
-                   f"= {normalizacion}):\n\n")
+        buf.append(f"\nTransition Density Matrix "
+                   f"(scheme = {esquema}, "
+                   f"normalization = {normalizacion}):\n\n")
         buf.append(_formatear_matriz(M, nombres_frag))
         buf.append("\n" + "-" * 60 + "\n")
 
@@ -287,10 +377,11 @@ def main():
 
         # --- Heatmaps (uno por modo) ---
         for modo in modos:
-            nombre_png = f"TDM_{spin}_S{estado.indice}_{modo}.png"
+            nombre_png = (f"TDM_{spin}_S{estado.indice}"
+                          f"_{esquema}_{modo}.png")
             graficar_matriz_densidad(
                 M,
-                vmax_global=vmax_por_modo[modo],
+                vmax_global=vmax_final_por_modo[modo],
                 titulo="",
                 nombres=nombres_frag,
                 guardar=True,
@@ -303,7 +394,7 @@ def main():
 
     print("\nHURRAY!!!")
     print(f"Results saved to {output_filename}")
-    print("Images saved as TDM_<spin>_S<index>_<mode>.png")
+    print("Images saved as TDM_<spin>_S<index>_<scheme>_<mode>.png")
 
 
 if __name__ == "__main__":

@@ -7,17 +7,7 @@ import numpy as np
 
 
 def preparar_matriz_para_plot(matriz: np.ndarray, modo: str) -> np.ndarray:
-    """Transforma la TDM al formato del modo de ploteo elegido.
-
-    Parameters
-    ----------
-    matriz : (n, n) ndarray
-        TDM cruda (con signo)
-    modo : str
-        'signed'      → devuelve la matriz tal cual
-        'magnitude'   → devuelve |T|
-        'probability' → devuelve |T|² / Σ|T|²
-    """
+    """Transforma la TDM al formato del modo de ploteo elegido."""
     if modo == "signed":
         return matriz.copy()
     if modo == "magnitude":
@@ -35,29 +25,27 @@ def graficar_matriz_densidad(
     nombres: Optional[List[str]] = None,
     titulo: str = "",
     cmap: str = "viridis",
-    tamano_ejes: int = 18,
+    tamano_ejes: int = 16,
     tamano_titulo: int = 14,
     guardar: bool = False,
     filename: Optional[str] = None,
     modo: str = "signed",
+    color_grilla: str = "white",
+    grosor_grilla: float = 1.5,
 ):
-    """Heatmap de la TDM reducida a fragmentos.
+    """Heatmap en convención matemática estándar.
 
-    Parameters
-    ----------
-    matriz : (n, n) ndarray
-        TDM **cruda** (con signo). La transformación según `modo` se
-        hace internamente.
-    vmax_global : float o None
-        Máximo de la escala de color. Para 'signed' el rango es
-        [-vmax_global, +vmax_global]; para 'magnitude'/'probability'
-        el rango es [0, vmax_global]. Si None, se calcula del propio
-        `matriz`.
-    modo : {'signed', 'magnitude', 'probability'}
-        Cómo transformar y colorear la matriz.
+    * T[0,0] en la esquina superior-izquierda.
+    * T[n-1,n-1] en la esquina inferior-derecha.
+    * Diagonal principal: de arriba-izquierda a abajo-derecha.
+    * Índice i (fila, donador) crece hacia ABAJO.
+    * Índice j (columna, aceptor) crece hacia la DERECHA.
+    * Ticks arriba (j) e izquierda (i).
+    * Grilla entre celdas.
     """
     M_plot = preparar_matriz_para_plot(matriz, modo)
 
+    # --- Rango de color ---
     if modo == "signed":
         if vmax_global is None:
             vmax_global = float(np.abs(M_plot).max()) if M_plot.size else 1.0
@@ -69,26 +57,44 @@ def graficar_matriz_densidad(
         vmax_global = max(vmax_global, 1e-12)
         vmin, vmax = 0.0, vmax_global
 
-    fig, ax = plt.subplots(figsize=(8, 6))
-    im = ax.imshow(
-        M_plot, cmap=cmap, interpolation='nearest',
-        vmin=vmin, vmax=vmax,
-    )
-
     n = M_plot.shape[0]
     if nombres is None:
         nombres = [str(i + 1) for i in range(n)]
 
+    # --- Figura cuadrada ---
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    im = ax.imshow(
+        M_plot,
+        cmap=cmap,
+        interpolation='nearest',
+        vmin=vmin, vmax=vmax,
+        origin='upper',              # ← T[0,0] arriba-izquierda
+        aspect='equal',              # celdas cuadradas
+    )
+
+    # --- Ticks: arriba (j) e izquierda (i) ---
     ax.set_xticks(range(n))
     ax.set_yticks(range(n))
     ax.set_xticklabels(nombres, fontsize=tamano_ejes, fontweight='bold')
     ax.set_yticklabels(nombres, fontsize=tamano_ejes, fontweight='bold')
 
-    plt.colorbar(im, ax=ax)
+    ax.xaxis.tick_top()                          # ticks del eje j arriba
+    ax.tick_params(axis='both', length=0)        # sin marquitas
+
+    # --- Grilla entre celdas ---
+    ax.set_xticks(np.arange(-0.5, n, 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, n, 1), minor=True)
+    ax.grid(which='minor', color=color_grilla, linewidth=grosor_grilla)
+    ax.tick_params(which='minor', length=0)
+
+    # --- Colorbar ---
+    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
     if titulo:
-        ax.set_title(titulo, fontsize=tamano_titulo)
+        ax.set_title(titulo, fontsize=tamano_titulo, pad=20)
     plt.tight_layout()
 
     if guardar and filename:
-        plt.savefig(filename, dpi=150)
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
     plt.close(fig)

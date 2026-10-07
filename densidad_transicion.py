@@ -2,9 +2,10 @@
 
 T[F, G] = Σ_{i,a} c_ia · W_{F,i} · W_{G,a}
 
-con:
-  * c_ia  = amplitud CI   = sqrt(Sq. CI coeff.)
-  * W_F,i = Σ_{μ ∈ F} C_{μ,i}   (coeficientes CON signo, sin truncar)
+Esquemas de reducción disponibles:
+  * 'signed'     : W_F,i = Σ_{μ∈F} C_{μi}      (con fase, riguroso)
+  * 'population' : W_F,i = √(Σ_{μ∈F} C_{μi}²)  (Mulliken, énfasis CT)
+  * 'abs_sum'    : W_F,i = Σ_{μ∈F} |C_{μi}|    (sin cancelación)
 """
 from __future__ import annotations
 
@@ -49,6 +50,43 @@ def construir_indices_ao_por_fragmento(
 
 
 # ---------------------------------------------------------------------------
+# Reducción MO → fragmento según esquema
+# ---------------------------------------------------------------------------
+
+def _reducir_mo_a_fragmentos(
+    C: np.ndarray,
+    frag_ao_idx: List[np.ndarray],
+    mo_idx: int,
+    esquema: str,
+) -> np.ndarray:
+    """Devuelve W[F] para todos los fragmentos, según el esquema elegido.
+
+    Parameters
+    ----------
+    C          : (n_ao, n_mo) matriz de coeficientes AO
+    frag_ao_idx: lista de arrays con índices AO por fragmento
+    mo_idx     : índice 0-based del MO a reducir
+    esquema    : {'signed', 'population', 'abs_sum'}
+    """
+    n_frag = len(frag_ao_idx)
+    W = np.zeros(n_frag, dtype=float)
+
+    if esquema == 'signed':
+        for k in range(n_frag):
+            W[k] = C[frag_ao_idx[k], mo_idx].sum()
+    elif esquema == 'population':
+        for k in range(n_frag):
+            W[k] = float(np.sqrt((C[frag_ao_idx[k], mo_idx] ** 2).sum()))
+    elif esquema == 'abs_sum':
+        for k in range(n_frag):
+            W[k] = np.abs(C[frag_ao_idx[k], mo_idx]).sum()
+    else:
+        raise ValueError(f"esquema desconocido: {esquema}")
+
+    return W
+
+
+# ---------------------------------------------------------------------------
 # TDM
 # ---------------------------------------------------------------------------
 
@@ -57,6 +95,7 @@ def tdm_fragmentos(
     estado: EstadoCI,
     frag_ao_idx: List[np.ndarray],
     normalizar: str = 'none',
+    esquema: str = 'signed',
 ) -> np.ndarray:
     """TDM (bloque occ→vir) reducida a fragmentos.
 
@@ -66,11 +105,12 @@ def tdm_fragmentos(
     estado      : EstadoCI
     frag_ao_idx : índices AO por fragmento
     normalizar  : {'none', 'frobenius', 'suma_abs', 'max_abs', 'densidad'}
-        * none       : sin normalizar (valores físicos)
-        * frobenius  : T / ||T||_F      (comparable entre estados)
-        * suma_abs   : T / Σ|T|         (fracciones L1)
-        * max_abs    : T / max|T|       (máximo = ±1)
-        * densidad   : |T|² / Σ|T|²     (probabilidades en [0,1])
+        Normalización numérica de la matriz resultante.
+    esquema     : {'signed', 'population', 'abs_sum'}
+        Cómo reducir cada MO al fragmento:
+          * 'signed'     : W_F,i = Σ_{μ∈F} C_{μi}      (riguroso, con fase)
+          * 'population' : W_F,i = √(Σ_{μ∈F} C_{μi}²)  (Mulliken)
+          * 'abs_sum'    : W_F,i = Σ_{μ∈F} |C_{μi}|    (sin cancelación)
 
     Returns
     -------
@@ -81,19 +121,17 @@ def tdm_fragmentos(
     C = ndol.C
 
     for t in estado.transiciones:
-        c_ia = t.c_ia                       # sqrt(c²) → amplitud
+        c_ia = t.c_ia
         if c_ia == 0.0:
             continue
-        i_mo = t.i - 1                      # 0-based
+        i_mo = t.i - 1
         a_mo = t.a - 1
 
         if not (0 <= i_mo < C.shape[1] and 0 <= a_mo < C.shape[1]):
             continue
 
-        W_i = np.array([C[frag_ao_idx[k], i_mo].sum()
-                        for k in range(n_frag)])
-        W_a = np.array([C[frag_ao_idx[k], a_mo].sum()
-                        for k in range(n_frag)])
+        W_i = _reducir_mo_a_fragmentos(C, frag_ao_idx, i_mo, esquema)
+        W_a = _reducir_mo_a_fragmentos(C, frag_ao_idx, a_mo, esquema)
 
         M += c_ia * np.outer(W_i, W_a)
 
