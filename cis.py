@@ -1,100 +1,114 @@
-# cis.py
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
-def read_cis_transitions(file_path: str) -> Dict[str, Any]:
-    """
-    Parse CIS transitions from an .ndo-like file.
-    Returns a dict with key "excited_states" that maps to a list of states.
-    Each state is {"state": int, "transitions": [ ... ]}.
-    """
-    with open(file_path, 'r', encoding='latin1', errors='ignore') as f:
-        lines = f.readlines()
+# ------------------------------------------------------------------
+# Regex precompiladas (una sola vez al importar el módulo)
+# ------------------------------------------------------------------
+_RE_CONFIG    = re.compile(r'\*\*\* CONFIGURATION INTERACTION \*\*\*')
+_RE_SINGLET   = re.compile(r'SINGLET - SINGLET TRANSITIONS')
+_RE_MAJOR     = re.compile(r'MAJOR ATOMIC ORBITAL CONTRIBUTIONS TO THE FIRST')
+_RE_TRIPLET   = re.compile(r'TRIPLET - TRIPLET TRANSITIONS')
+_RE_ESTADO    = re.compile(r'SINGLY EXCITED CI STATE no\.\s+(\d+):')
+_RE_TRANS     = re.compile(r"Single occ\. MO's\s+(\d+).*=>\s+(\d+)")
+_RE_COEF_CUAD = re.compile(r'Sq\. CI coeff\.\:\s+([0-9.]+)')
+_RE_ATOMO     = re.compile(r'(\d+)[A-Z]')
 
-    inside_config = False
-    inside_singlet = False
-    inside_major_block = False
-    current_state = None
-    transitions = {}
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if '*** CONFIGURATION INTERACTION ***' in line:
-            inside_config = True
-        if inside_config and 'SINGLET - SINGLET TRANSITIONS' in line:
-            inside_singlet = True
-        if inside_singlet and 'MAJOR ATOMIC ORBITAL CONTRIBUTIONS TO THE FIRST' in line:
-            inside_major_block = True
 
-        if inside_major_block:
-            m_state = re.search(r'SINGLY EXCITED CI STATE no\.\s+(\d+):', line)
-            if m_state:
-                current_state = int(m_state.group(1))
-                transitions[current_state] = []
-                i += 1
-                continue
+def _parsear_float(s: str) -> float:
+    s = s.strip()
+    if not s:
+        return 0.0
+    try:
+        return float(s.replace('D', 'E').replace('d', 'e'))
+    except ValueError:
+        return 0.0
 
-            m_trans = re.search(r"Single occ\. MO's\s+(\d+).*=>\s+(\d+)", line)
-            if m_trans:
-                occ_orb = int(m_trans.group(1))
-                virt_orb = int(m_trans.group(2))
-                coef = None
-                occupied = []
-                virtual = []
 
-                # attempt to find coefficient on next line
-                if i + 1 < len(lines):
-                    m_coef = re.search(r'Sq\. CI coeff\.\:\s*([+-]?\d*\.\d+|[+-]?\d+)', lines[i + 1])
-                    if m_coef:
-                        try:
-                            coef = float(m_coef.group(1))
-                        except ValueError:
-                            coef = None
+def extraer_transiciones_con_coef(
+    file_path: str,
+    lines: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    if lines is None:
+        with open(file_path, 'r', encoding='latin1', errors='ignore') as f:
+            lines = f.readlines()
 
-                # parse following block lines for atomic contributions (best-effort)
-                for j in range(2, 8):
-                    if i + j < len(lines):
-                        l = lines[i + j]
-                        # try to extract atom numbers and coefficients at plausible columns
-                        m_occ_atom = re.search(r'(\d+)[A-Z]', l[25:30])  # heuristic
-                        m_virt_atom = re.search(r'(\d+)[A-Z]', l[53:58])
-                        try:
-                            occ_atom = int(m_occ_atom.group(1)) if m_occ_atom else None
-                        except ValueError:
-                            occ_atom = None
-                        try:
-                            virt_atom = int(m_virt_atom.group(1)) if m_virt_atom else None
-                        except ValueError:
-                            virt_atom = None
+    transiciones: Dict[int, List[Dict[str, Any]]] = {}
+    estado_actual: Optional[int] = None
+    dentro_config = dentro_singlet = dentro_major = False
 
-                        # coefficients heuristics (may vary by output)
-                        try:
-                            occ_coef = float(l[41:49].strip())
-                        except Exception:
-                            occ_coef = 0.0
-                        try:
-                            virt_coef = float(l[69:77].strip())
-                        except Exception:
-                            virt_coef = 0.0
+    for i, line in enumerate(lines):
+        if not dentro_config:
+            if _RE_CONFIG.search(line):
+                dentro_config = True
+            continue
 
-                        occupied.append((occ_atom, occ_coef))
-                        virtual.append((virt_atom, virt_coef))
+        if not dentro_singlet:
+            if _RE_SINGLET.search(line):
+                dentro_singlet = True
+            continue
 
-                if coef is not None and current_state is not None:
-                    transitions[current_state].append({
-                        "occupied_orb": occ_orb,
-                        "virtual_orb": virt_orb,
-                        "coef": coef,
-                        "occupied": occupied,   # list of (atom_index or None, coef)
-                        "virtual": virtual
-                    })
+        if not dentro_major:
+            if _RE_MAJOR.search(line):
+                dentro_major = True
+            continue
 
-        if 'TRIPLET - TRIPLET TRANSITIONS' in line:
+        if _RE_TRIPLET.search(line):
             break
-        i += 1
 
-    excited_states = []
-    for st in sorted(transitions.keys()):
-        excited_states.append({"state": st, "transitions": transitions[st]})
+        m_estado = _RE_ESTADO.search(line)
+        if m_estado:
+            estado_actual = int(m_estado.group(1))
+            transiciones.setdefault(estado_actual, [])
+            continue
 
-    return {"excited_states": excited_states}
+        if estado_actual is None:
+            continue
+
+        m_trans = _RE_TRANS.search(line)
+        if not m_trans:
+            continue
+
+        orbital_ocupado = int(m_trans.group(1))
+        orbital_virtual = int(m_trans.group(2))
+
+        # Coeficiente CI (c²) en la línea siguiente
+        coef = 0.0
+        if i + 1 < len(lines):
+            m_coef = _RE_COEF_CUAD.search(lines[i + 1])
+            if m_coef:
+                coef = _parsear_float(m_coef.group(1))
+
+        ocupados: List[tuple] = []
+        virtuales: List[tuple] = []
+
+        for j in range(2, 8):
+            k = i + j
+            if k >= len(lines):
+                break
+            row = lines[k]
+
+            # --- OFFSETS IDÉNTICOS AL ORIGINAL (no tocar) ---
+            m_at_occ = _RE_ATOMO.search(row[25:30])
+            m_at_vir = _RE_ATOMO.search(row[53:58])
+
+            atom_occ = int(m_at_occ.group(1)) if m_at_occ else None
+            atom_vir = int(m_at_vir.group(1)) if m_at_vir else None
+
+            coef_occ = _parsear_float(row[41:49])
+            coef_vir = _parsear_float(row[69:77])
+
+            ocupados.append((atom_occ, coef_occ))
+            virtuales.append((atom_vir, coef_vir))
+
+        transiciones[estado_actual].append({
+            'orbital_ocupado': orbital_ocupado,
+            'orbital_virtual': orbital_virtual,
+            'coeficiente': coef,
+            'ocupado': ocupados,
+            'virtual': virtuales,
+        })
+
+    return [
+        {"estado": eid, "transiciones": transiciones[eid]}
+        for eid in sorted(transiciones)
+    ]

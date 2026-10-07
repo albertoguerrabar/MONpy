@@ -1,32 +1,94 @@
-# graficar_densidad.py
-import matplotlib.pyplot as plt
-import numpy as np
 from typing import List, Optional
 
-def plot_transition_density(matrix: np.ndarray,
-                            vmax_global: Optional[float]=None,
-                            names: Optional[List[str]]=None,
-                            title: str="Transition Density Matrix",
-                            cmap: str="viridis",
-                            fontsize_ticks: int=18,
-                            fontsize_title: int=14,
-                            save: bool=False,
-                            filename: Optional[str]=None):
-    plt.figure(figsize=(8, 6))
-    vmin = 0.0
-    vmax = vmax_global if vmax_global is not None else np.max(matrix) if matrix.size > 0 else 1.0
-    im = plt.imshow(matrix, cmap=cmap, interpolation='nearest', vmin=vmin, vmax=vmax)
-    nrows, ncols = matrix.shape
-    if names is None:
-        names = [str(i+1) for i in range(ncols)]
-    plt.xticks([])
-    plt.yticks([])
-    for idx, nm in enumerate(names):
-        plt.text(idx, -0.6, nm, ha='center', va='bottom', fontsize=fontsize_ticks, fontweight='bold')
-        plt.text(-0.6, idx, nm, ha='right', va='center', fontsize=fontsize_ticks, fontweight='bold')
-    plt.colorbar(im, label="")
-    plt.title(title, fontsize=fontsize_title)
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+
+
+def preparar_matriz_para_plot(matriz: np.ndarray, modo: str) -> np.ndarray:
+    """Transforma la TDM al formato del modo de ploteo elegido.
+
+    Parameters
+    ----------
+    matriz : (n, n) ndarray
+        TDM cruda (con signo)
+    modo : str
+        'signed'      → devuelve la matriz tal cual
+        'magnitude'   → devuelve |T|
+        'probability' → devuelve |T|² / Σ|T|²
+    """
+    if modo == "signed":
+        return matriz.copy()
+    if modo == "magnitude":
+        return np.abs(matriz)
+    if modo == "probability":
+        M2 = matriz * matriz
+        s = float(M2.sum())
+        return M2 / s if s > 0 else M2
+    raise ValueError(f"modo de ploteo desconocido: {modo}")
+
+
+def graficar_matriz_densidad(
+    matriz: np.ndarray,
+    vmax_global: Optional[float] = None,
+    nombres: Optional[List[str]] = None,
+    titulo: str = "",
+    cmap: str = "viridis",
+    tamano_ejes: int = 18,
+    tamano_titulo: int = 14,
+    guardar: bool = False,
+    filename: Optional[str] = None,
+    modo: str = "signed",
+):
+    """Heatmap de la TDM reducida a fragmentos.
+
+    Parameters
+    ----------
+    matriz : (n, n) ndarray
+        TDM **cruda** (con signo). La transformación según `modo` se
+        hace internamente.
+    vmax_global : float o None
+        Máximo de la escala de color. Para 'signed' el rango es
+        [-vmax_global, +vmax_global]; para 'magnitude'/'probability'
+        el rango es [0, vmax_global]. Si None, se calcula del propio
+        `matriz`.
+    modo : {'signed', 'magnitude', 'probability'}
+        Cómo transformar y colorear la matriz.
+    """
+    M_plot = preparar_matriz_para_plot(matriz, modo)
+
+    if modo == "signed":
+        if vmax_global is None:
+            vmax_global = float(np.abs(M_plot).max()) if M_plot.size else 1.0
+        vmax_global = max(vmax_global, 1e-12)
+        vmin, vmax = -vmax_global, vmax_global
+    else:
+        if vmax_global is None:
+            vmax_global = float(M_plot.max()) if M_plot.size else 1.0
+        vmax_global = max(vmax_global, 1e-12)
+        vmin, vmax = 0.0, vmax_global
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    im = ax.imshow(
+        M_plot, cmap=cmap, interpolation='nearest',
+        vmin=vmin, vmax=vmax,
+    )
+
+    n = M_plot.shape[0]
+    if nombres is None:
+        nombres = [str(i + 1) for i in range(n)]
+
+    ax.set_xticks(range(n))
+    ax.set_yticks(range(n))
+    ax.set_xticklabels(nombres, fontsize=tamano_ejes, fontweight='bold')
+    ax.set_yticklabels(nombres, fontsize=tamano_ejes, fontweight='bold')
+
+    plt.colorbar(im, ax=ax)
+    if titulo:
+        ax.set_title(titulo, fontsize=tamano_titulo)
     plt.tight_layout()
-    if save and filename:
-        plt.savefig(filename)
-    plt.close()
+
+    if guardar and filename:
+        plt.savefig(filename, dpi=150)
+    plt.close(fig)

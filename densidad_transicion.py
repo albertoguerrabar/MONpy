@@ -1,61 +1,185 @@
-# densidad_transicion.py
+"""TDM reducida a fragmentos — versión corregida (fase + amplitudes CI).
+
+T[F, G] = Σ_{i,a} c_ia · W_{F,i} · W_{G,a}
+
+con:
+  * c_ia  = amplitud CI   = sqrt(Sq. CI coeff.)
+  * W_F,i = Σ_{μ ∈ F} C_{μ,i}   (coeficientes CON signo, sin truncar)
+"""
+from __future__ import annotations
+
+from typing import Dict, List
+
 import numpy as np
-from typing import Dict, List, Any
 
-def build_fragment_transition_density(structure: List[Dict[str, Any]],
-                                      fragments: Dict[int, List[int]],
-                                      cis_data: Dict[str, Any],
-                                      state_index: int = 0):
+from ndol_parser import NDOLOutput, EstadoCI
+
+
+# ---------------------------------------------------------------------------
+# Construcción de índices
+# ---------------------------------------------------------------------------
+
+def construir_mapa_atomos_a_fragmento(
+    fragmentos: Dict[str, List[int]]
+) -> Dict[int, int]:
+    """Número de átomo (1-based) → índice de fragmento (0-based)."""
+    mapa: Dict[int, int] = {}
+    for idx_f, (_, atomos) in enumerate(fragmentos.items()):
+        for at in atomos:
+            mapa[int(at)] = idx_f
+    return mapa
+
+
+def construir_indices_ao_por_fragmento(
+    ndol: NDOLOutput,
+    fragmentos: Dict[str, List[int]],
+) -> List[np.ndarray]:
+    """Precomputa los índices AO pertenecientes a cada fragmento."""
+    n_frag = len(fragmentos)
+    atom_to_frag = construir_mapa_atomos_a_fragmento(fragmentos)
+    frag_ao: List[List[int]] = [[] for _ in range(n_frag)]
+
+    for ao_idx, atom_idx in enumerate(ndol.ao_a_atomo):
+        atom_num = int(atom_idx) + 1                # 1-based
+        f = atom_to_frag.get(atom_num)
+        if f is not None:
+            frag_ao[f].append(ao_idx)
+
+    return [np.array(x, dtype=int) for x in frag_ao]
+
+
+# ---------------------------------------------------------------------------
+# TDM
+# ---------------------------------------------------------------------------
+
+def tdm_fragmentos(
+    ndol: NDOLOutput,
+    estado: EstadoCI,
+    frag_ao_idx: List[np.ndarray],
+    normalizar: str = 'none',
+) -> np.ndarray:
+    """TDM (bloque occ→vir) reducida a fragmentos.
+
+    Parameters
+    ----------
+    ndol        : NDOLOutput
+    estado      : EstadoCI
+    frag_ao_idx : índices AO por fragmento
+    normalizar  : {'none', 'frobenius', 'suma_abs', 'max_abs', 'densidad'}
+        * none       : sin normalizar (valores físicos)
+        * frobenius  : T / ||T||_F      (comparable entre estados)
+        * suma_abs   : T / Σ|T|         (fracciones L1)
+        * max_abs    : T / max|T|       (máximo = ±1)
+        * densidad   : |T|² / Σ|T|²     (probabilidades en [0,1])
+
+    Returns
+    -------
+    M : (n_frag, n_frag) ndarray
     """
-    Build transition density matrix aggregated by fragments for a given excited state index (0-based).
-    - structure: list of atom dicts (must contain 'number' for atom index)
-    - fragments: dict mapping fragment_id -> list of atom indices (1-based)
-    - cis_data: output from read_cis_transitions()
-    - state_index: index in cis_data['excited_states'] list (0-based)
-    Returns: matrix shape (n_frag, n_frag)
-    """
-    frag_names = list(fragments.keys())
-    n_frag = len(frag_names)
+    n_frag = len(frag_ao_idx)
     M = np.zeros((n_frag, n_frag), dtype=float)
+    C = ndol.C
 
-    excited_states = cis_data.get("excited_states", [])
-    if state_index < 0 or state_index >= len(excited_states):
-        raise IndexError("state_index out of range in CIS data")
+    for t in estado.transiciones:
+        c_ia = t.c_ia                       # sqrt(c²) → amplitud
+        if c_ia == 0.0:
+            continue
+        i_mo = t.i - 1                      # 0-based
+        a_mo = t.a - 1
 
-    state = excited_states[state_index]
-    trans_list = state.get("transitions", [])
+        if not (0 <= i_mo < C.shape[1] and 0 <= a_mo < C.shape[1]):
+            continue
 
-    # map atom -> fragment index for fast lookup
-    atom_to_frag = {}
-    for idx, frag in enumerate(frag_names):
-        for atom in fragments[frag]:
-            atom_to_frag[atom] = idx
+        W_i = np.array([C[frag_ao_idx[k], i_mo].sum()
+                        for k in range(n_frag)])
+        W_a = np.array([C[frag_ao_idx[k], a_mo].sum()
+                        for k in range(n_frag)])
 
-    # Sum contributions: for each excitation contribution, add abs(coef * occ_coef * virt_coef)
-    total_contrib = 0.0
-    for trans in trans_list:
-        coef = trans.get("coef", 0.0)
-        occupied = trans.get("occupied", [])
-        virtual = trans.get("virtual", [])
-        # occupied and virtual are lists of (atom_index or None, coef)
-        for occ_atom, occ_c in occupied:
-            for virt_atom, virt_c in virtual:
-                if occ_atom is None or virt_atom is None:
-                    continue
-                frag_i = atom_to_frag.get(occ_atom, None)
-                frag_j = atom_to_frag.get(virt_atom, None)
-                if frag_i is None or frag_j is None:
-                    # atom not assigned to any fragment (shouldn't happen)
-                    continue
-                contrib = coef * (occ_c**2) * (virt_c**2)
-                M[frag_i, frag_j] += contrib
-                total_contrib += contrib
+        M += c_ia * np.outer(W_i, W_a)
 
-    # Normalización
-    M_norm = np.zeros((n_frag, n_frag), dtype=float)
-    if total_contrib > 0:
-        M_norm = M / total_contrib
-    else:
-        M_norm = M
-    
-    return M, M_norm
+    # --- Normalización numérica ---
+    if normalizar == 'frobenius':
+        nrm = float(np.sqrt((M * M).sum()))
+        if nrm > 0:
+            M = M / nrm
+    elif normalizar == 'suma_abs':
+        nrm = float(np.abs(M).sum())
+        if nrm > 0:
+            M = M / nrm
+    elif normalizar == 'max_abs':
+        nrm = float(np.abs(M).max()) if M.size else 0.0
+        if nrm > 0:
+            M = M / nrm
+    elif normalizar == 'densidad':
+        M2 = M * M
+        nrm = float(M2.sum())
+        if nrm > 0:
+            M = M2 / nrm
+
+    return M
+
+
+# ---------------------------------------------------------------------------
+# Análisis
+# ---------------------------------------------------------------------------
+
+def analizar_tdm(
+    M: np.ndarray,
+    nombres: List[str],
+) -> Dict[str, object]:
+    """Extrae métricas interpretativas de la TDM.
+
+    Parameters
+    ----------
+    M       : matriz TDM (n_frag × n_frag)
+    nombres : nombres de fragmentos
+
+    Returns
+    -------
+    dict con:
+        Lambda_CT     : índice de transferencia de carga ∈ [0,1]
+        T_dominante   : valor del off-diagonal más grande en |·|
+        par_dominante : (frag_sale, frag_llega)
+        peso_LE       : Σ T_FF² / Σ T²  (peso local)
+        dQ            : vector de ΔQ por fragmento (cols - filas)
+        suma_filas    : S_F^out
+        suma_cols     : S_G^in
+    """
+    M2 = M * M
+    total = float(M2.sum())
+    n = M.shape[0]
+
+    if total == 0:
+        return {
+            'Lambda_CT': 0.0,
+            'T_dominante': 0.0,
+            'par_dominante': ('-', '-'),
+            'peso_LE': 0.0,
+            'dQ': np.zeros(n),
+            'suma_filas': np.zeros(n),
+            'suma_cols': np.zeros(n),
+        }
+
+    diag = float(np.trace(M2))
+    lambda_ct = 1.0 - diag / total
+    peso_le = diag / total
+
+    # Par dominante off-diagonal
+    off = M2 - np.diag(np.diag(M2))
+    ij = np.unravel_index(int(np.argmax(off)), off.shape)
+    T_dom = float(M[ij])
+    par_dom = (nombres[ij[0]], nombres[ij[1]])
+
+    suma_filas = M.sum(axis=1)     # cuánto sale de F
+    suma_cols = M.sum(axis=0)      # cuánto llega a G
+    dQ = suma_cols - suma_filas
+
+    return {
+        'Lambda_CT': lambda_ct,
+        'T_dominante': T_dom,
+        'par_dominante': par_dom,
+        'peso_LE': peso_le,
+        'dQ': dQ,
+        'suma_filas': suma_filas,
+        'suma_cols': suma_cols,
+    }
