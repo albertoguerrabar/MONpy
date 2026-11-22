@@ -1,0 +1,43 @@
+name: Publish documentation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build Sphinx HTML
+        run: |
+          python -m pip install "sphinx==9.0.4"
+          python -m sphinx -W -n -b html docs/source docs/build/html
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/build/html
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish HTML
+        id: deployment
+        uses: actions/deploy-pages@v4
