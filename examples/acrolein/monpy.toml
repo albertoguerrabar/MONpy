@@ -1,0 +1,11 @@
+ndol = "acro.ndo"
+output_dir = "results"
+export_ao = false
+
+[states]
+singlet = [1, 2]
+# triplet = "all"
+
+[fragments]
+A = "1-4"
+B = "5-8"

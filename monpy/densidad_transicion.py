@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ndol_parser import EstadoCI, NDOLOutput
+from .ndol_parser import EstadoCI, NDOLOutput
 
 
 def construir_indices_ao_por_fragmento(

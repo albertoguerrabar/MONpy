@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -8,7 +10,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
 def graficar_fracciones(
-    fracciones: np.ndarray, nombres: list[str], filename: str,
+    fracciones: np.ndarray, nombres: list[str], filename: str | Path,
 ) -> None:
     fig, ax = plt.subplots(figsize=(6, 6))
     try:

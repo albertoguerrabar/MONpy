@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.venv/
+docs/build/
+examples/*/results/
+examples/contcar_n2sd/CONTCAR_n2SD.ndo
+monpy_results.txt
+estados.csv
+CT_*.png
+TDM_AO_*.npy
