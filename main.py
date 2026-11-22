@@ -2,17 +2,16 @@ import sys
 
 import numpy as np
 
-from ndol_parser import parse_ndol
-from fragmentos import definir_fragmentos
 from densidad_transicion import (
+    analizar_pesos,
     construir_indices_ao_por_fragmento,
-    tdm_fragmentos,
-    analizar_tdm,
+    construir_tdm_ao,
+    pesos_por_fragmento,
+    verificar_base_ortogonal,
 )
-from graficar_densidad import (
-    graficar_matriz_densidad,
-    preparar_matriz_para_plot,
-)
+from fragmentos import definir_fragmentos
+from graficar_densidad import graficar_fracciones
+from ndol_parser import parse_ndol
 
 LOGO = r"""
            __  __  ____  _   _
@@ -28,374 +27,166 @@ LOGO = r"""
 INFO_BLOCK = """
  *******************************************************
  *               Alberto Guerra-Barroso                *
- *                  Dept of Chemistry                  *
- *           Faculty of Exact Sciences, UNAB           *
+ *    Lab of Computational and Theoretical Chemistry   *
+ *      Faculty of Chemistry,University of Havana      *
  *                                                     *
  *                        and                          *
  *                                                     *
  *              Ana Lilian Montero-Alejo               *
- *            Dept of Physics, FCNMM, UTEM             *
+ *          Department of Physics, FCNMM, UTEM         *
  *******************************************************
 """
 
 
-# ----------------------------------------------------------------------
-# Utilidades de presentación
-# ----------------------------------------------------------------------
+CITATION_BLOCK = (
+    "How to cite MONpy\n"
+    "  Software repository (GitHub): [URL pending]\n"
+    "  Associated article: [bibliographic reference and DOI pending]"
+)
 
-def _formatear_matriz(matriz: np.ndarray, nombres) -> str:
-    """Formatea la TDM como texto alineado, con cabecera de fragmentos."""
-    header = " " * 12 + "".join(f"{n:>14}" for n in nombres)
-    sep = "-" * (12 + 14 * len(nombres))
-    filas = [header, sep]
-    for i, nf in enumerate(nombres):
-        fila = f"{nf:12}" + "".join(
-            f"{matriz[i, j]:14.6f}" for j in range(len(nombres))
-        )
-        filas.append(fila)
+
+def _formatear_matriz(matriz: np.ndarray, nombres: list[str]) -> str:
+    ancho = max(14, max(map(len, nombres)) + 2)
+    filas = [" " * ancho + "".join(f"{nombre:>{ancho}}" for nombre in nombres)]
+    for nombre, fila in zip(nombres, matriz):
+        filas.append(f"{nombre:<{ancho}}" + "".join(f"{valor:{ancho}.8g}" for valor in fila))
     return "\n".join(filas)
 
 
-def _formatear_analisis(info: dict, nombres: list) -> str:
-    """Formatea el análisis de la TDM (Λ_CT, peso LE, par dominante, ΔQ)."""
-    lineas = []
-    lineas.append(f"  Lambda_CT = {info['Lambda_CT']:.4f}  "
-                  f"(0 = LE puro, 1 = CT puro)")
-    lineas.append(f"  peso LE   = {info['peso_LE']:.4f}")
-    f1, f2 = info['par_dominante']
-    lineas.append(f"  Par dominante: {f1} -> {f2}   "
-                  f"T = {info['T_dominante']:+.4f}")
-    lineas.append("  Delta Q por fragmento (heuristico, suma 0):")
-    for k, nf in enumerate(nombres):
-        lineas.append(f"      {nf:10s}  dQ = {info['dQ'][k]:+8.4f}")
-    return "\n".join(lineas)
+def _seleccionar_estados(ndol):
+    opciones = {"1": {"singlet"}, "2": {"triplet"}, "3": {"singlet", "triplet"}}
+    while True:
+        opcion = input("Spin (1 singlet, 2 triplet, 3 both) [1]: ").strip() or "1"
+        if opcion in opciones:
+            break
+        print("Choose 1, 2 or 3.")
+    estados = [
+        e for e in ndol.estados_singlete + ndol.estados_triplete
+        if e.espin in opciones[opcion]
+    ]
+    for i, e in enumerate(estados, 1):
+        f = f"{e.f_osc:.4f}" if np.isfinite(e.f_osc) else "unavailable"
+        print(f"{i:4d}  {e.espin} #{e.indice}  E = {e.energia_eV:.4f} eV  f = {f}")
+    while estados:
+        seleccion = input("Select states (e.g. 1,2 or all): ").strip().lower()
+        if seleccion == "all":
+            return estados
+        campos = [campo.strip() for campo in seleccion.split(",")]
+        if all(campo.isdecimal() for campo in campos):
+            indices = [int(campo) for campo in campos]
+            if len(set(indices)) == len(indices) and all(1 <= i <= len(estados) for i in indices):
+                return [estados[i - 1] for i in indices]
+        print("Enter distinct numbers from the list, or all.")
+    return []
 
 
-def _pedir_opcion(mensaje: str, opciones: dict, default: str) -> str:
-    """Pide una opción mostrando el menú; devuelve la clave elegida."""
-    print(mensaje)
-    for k, v in opciones.items():
-        print(f"{k} - {v}")
-    raw = input(f"Select [{default}]: ").strip() or default
-    return raw if raw in opciones else default
-
-
-# ----------------------------------------------------------------------
-# Flujo principal
-# ----------------------------------------------------------------------
-
-def main():
+def main() -> int:
     print(LOGO)
     print("         MONpy: MO-based NDOL python\n")
     print(INFO_BLOCK)
-
-    # --- Archivo de entrada ---
-    archivo = (sys.argv[1] if len(sys.argv) > 1
-               else input("Introduce the inputfile.ndo: ").strip())
-
-    print(f"\nParsing {archivo}...")
+    archivo = sys.argv[1] if len(sys.argv) > 1 else input("NDOL input file: ").strip()
     try:
         ndol = parse_ndol(archivo)
-    except Exception as e:
-        print(f"Error parsing NDOL output: {e}")
-        return
+    except (OSError, ValueError) as exc:
+        print(f"Error parsing NDOL output: {exc}", file=sys.stderr)
+        return 1
 
-    print(f"Molecular structure with {len(ndol.atomos)} atoms")
-    print(f"MO matrix: {ndol.C.shape[0]} AOs x {ndol.C.shape[1]} MOs")
-    if ndol.n_valencia_mo is not None:
-        print(f"Total valence orbitals: {ndol.n_valencia_mo}, "
-              f"{ndol.n_ocupados} occupied")
-    print(f"Singlet CI states: {len(ndol.estados_singlete)}")
-    print(f"Triplet CI states: {len(ndol.estados_triplete)}")
+    print(f"{len(ndol.atomos)} atoms | {ndol.n_ao} AOs × {ndol.n_mo} MOs")
+    estados = _seleccionar_estados(ndol)
+    if not estados:
+        print("No states found for the selected spin.", file=sys.stderr)
+        return 1
 
-    # --- Fragmentos ---
-    fragmentos = definir_fragmentos(ndol.atomos)
-    if not fragmentos:
-        print("Fragment mode is required.")
-        return
-
-    nombres_frag = list(fragmentos.keys())
-    frag_ao_idx = construir_indices_ao_por_fragmento(ndol, fragmentos)
-
-    print("\nFragments:")
-    for nombre, atomos in fragmentos.items():
-        print(f"  - {nombre}: {len(atomos)} atoms")
-
-    # --- Elección de espín ---
-    op_spin = _pedir_opcion(
-        "\nSpin state:",
-        {"1": "Singlet", "2": "Triplet", "3": "Both"},
-        default="1",
-    )
-    if op_spin == "1":
-        estados_todos = [(e, 'singlet') for e in ndol.estados_singlete]
-    elif op_spin == "2":
-        estados_todos = [(e, 'triplet') for e in ndol.estados_triplete]
-    else:
-        estados_todos = ([(e, 'singlet') for e in ndol.estados_singlete]
-                         + [(e, 'triplet') for e in ndol.estados_triplete])
-
-    if not estados_todos:
-        print("No excited states found for the selected spin.")
-        return
-
-    # --- Selección de estados ---
-    print(f"\nAvailable states: 1..{len(estados_todos)}")
-    for k, (e, spin) in enumerate(estados_todos, start=1):
-        print(f"  {k:3d}  [{spin:7s}]  E = {e.energia_eV:7.3f} eV   "
-              f"f = {e.f_osc:6.4f}")
-
-    entrada = input(
-        "\nSelect states (e.g. 1,2 or 'all'): "
-    ).strip().lower()
-    if entrada == "all":
-        indices = list(range(len(estados_todos)))
-    else:
+    informe = [LOGO, INFO_BLOCK, CITATION_BLOCK, "", f"Input file: {archivo}",
+               f"Atoms: {len(ndol.atomos)} | AOs: {ndol.n_ao} | MOs: {ndol.n_mo}"]
+    con_amplitudes = [
+        e for e in estados if e.transiciones
+        and all(t.amplitud is not None for t in e.transiciones)
+    ]
+    error_base = None
+    if con_amplitudes:
         try:
-            indices = [int(i) - 1 for i in entrada.split(",") if i.strip()]
-            indices = [i for i in indices if 0 <= i < len(estados_todos)]
-            if not indices:
-                print("No valid states selected.")
-                return
-        except ValueError:
-            print("Invalid input.")
-            return
-
-    # --- Esquema de reducción a fragmentos ---
-    op_esq = _pedir_opcion(
-        "\nFragment reduction scheme:",
-        {
-            "1": "Signed      W_F,i = Sum C_mu,i       (riguroso, con fase)",
-            "2": "Population  W_F,i = sqrt(Sum C^2)    (Mulliken, enfasis CT)",
-            "3": "AbsSum      W_F,i = Sum |C_mu,i|     (sin cancelacion)",
-        },
-        default="2",
-    )
-    esquema_map = {"1": "signed", "2": "population", "3": "abs_sum"}
-    esquema = esquema_map[op_esq]
-
-    # --- Normalización numérica de la TDM ---
-    op_norm = _pedir_opcion(
-        "\nTDM numerical normalization:",
-        {
-            "1": "Frobenius   T / ||T||_F      (comparable entre estados)",
-            "2": "MaxAbs      T / max|T|       (maximo = +/-1, preserva signo)",
-            "3": "SumaAbs     T / Sum|T|       (fracciones L1)",
-            "4": "None        sin normalizar (raw)",
-        },
-        default="1",
-    )
-    norm_map = {
-        "1": "frobenius",
-        "2": "max_abs",
-        "3": "suma_abs",
-        "4": "none",
-    }
-    normalizacion = norm_map[op_norm]
-
-    # --- Modos de ploteo a generar ---
-    op_plot = _pedir_opcion(
-        "\nPlot modes to generate:",
-        {
-            "1": "Signed only            (T, colorbar [-V, +V])",
-            "2": "Magnitude only         (|T|, colorbar [0, V])",
-            "3": "Probability only       (|T|^2 / sum, colorbar [0, 1])",
-            "4": "Both signed + magnitude",
-            "5": "All three modes",
-        },
-        default="4",
-    )
-    modos = {
-        "1": ["signed"],
-        "2": ["magnitude"],
-        "3": ["probability"],
-        "4": ["signed", "magnitude"],
-        "5": ["signed", "magnitude", "probability"],
-    }[op_plot]
-
-    # --- Cálculo de TDMs ---
-    print("\nComputing transition density matrices...")
-    resultados = []   # [(estado, spin, matriz | None, analisis | None)]
-
-    for idx in indices:
-        estado, spin = estados_todos[idx]
-        etiqueta = f"{spin} #{estado.indice}"
-        print(f"  {etiqueta}  (E = {estado.energia_eV:.3f} eV)...")
-        try:
-            M = tdm_fragmentos(
-                ndol, estado, frag_ao_idx,
-                normalizar=normalizacion,
-                esquema=esquema,
-            )
-            info = analizar_tdm(M, nombres_frag)
-            resultados.append((estado, spin, M, info))
-        except Exception as e:
-            print(f"    ERROR: {e}")
-            resultados.append((estado, spin, None, None))
-
-    # --- Estadísticas de distribución por modo ---
-    matrices_validas = [M for _, _, M, _ in resultados if M is not None]
-
-    stats_por_modo = {}
-    for modo in modos:
-        if not matrices_validas:
-            stats_por_modo[modo] = {}
-            continue
-        transformed = [preparar_matriz_para_plot(M, modo)
-                       for M in matrices_validas]
-        flat = np.concatenate([x.ravel() for x in transformed])
-        if modo == "signed":
-            abs_flat = np.abs(flat)
-            stats = {
-                'max_abs': float(abs_flat.max()),
-                'p99': float(np.percentile(abs_flat, 99)),
-                'p95': float(np.percentile(abs_flat, 95)),
-                'p90': float(np.percentile(abs_flat, 90)),
-                'p50': float(np.percentile(abs_flat, 50)),
-            }
+            error_ortogonalidad = verificar_base_ortogonal(ndol)
+        except ValueError as exc:
+            error_base = str(exc)
         else:
-            stats = {
-                'max': float(flat.max()),
-                'p99': float(np.percentile(flat, 99)),
-                'p95': float(np.percentile(flat, 95)),
-                'p90': float(np.percentile(flat, 90)),
-                'p50': float(np.percentile(flat, 50)),
-            }
-        stats_por_modo[modo] = stats
+            fragmentos = definir_fragmentos(ndol.atomos)
+            indices_ao = construir_indices_ao_por_fragmento(ndol, fragmentos)
+            nombres = list(fragmentos)
+            exportar_ao = input("Export signed AO matrices (.npy)? [y/N]: ").strip().lower() == "y"
+            informe.append(f"Effective NDOL AO basis: max |CᵀC − I| = {error_ortogonalidad:.3e}")
+            informe.append("Rows: hole fragment. Columns: electron fragment.")
+            for nombre, atomos in fragmentos.items():
+                informe.append(f"Fragment {nombre} (ATOM): " + ", ".join(map(str, atomos)))
 
-    print("\nDistribution of |T| values across all selected states:")
-    for modo in modos:
-        s = stats_por_modo[modo]
-        if not s:
+    calculados = 0
+    fallos_salida = False
+    for estado in estados:
+        etiqueta = f"{estado.espin.capitalize()} State {estado.indice}"
+        f = f"{estado.f_osc:.4f}" if np.isfinite(estado.f_osc) else "unavailable"
+        informe.append(f"\n{etiqueta} | E = {estado.energia_eV:.4f} eV | f = {f}")
+        print(etiqueta)
+        peso_ci = sum(t.c2 for t in estado.transiciones)
+        informe.append(f"  CI configurations printed: {len(estado.transiciones)} | sum(c^2) = {peso_ci:.6f}")
+        if error_base or not estado.transiciones or any(t.amplitud is None for t in estado.transiciones):
+            if not estado.transiciones:
+                motivo = "NDOL did not report CI transitions."
+            elif any(t.amplitud is None for t in estado.transiciones):
+                motivo = "Signed amplitudes missing. Enable CI COEFFICIENTS in NDOL."
+            else:
+                motivo = error_base
+            print(f"  {motivo}")
+            informe.append(f"  CT unavailable. {motivo}")
             continue
-        print(f"\n  [{modo}]")
-        if modo == "signed":
-            print(f"    max |T|  = {s['max_abs']:.6f}")
+
+        D = construir_tdm_ao(ndol, estado)
+        omega = pesos_por_fragmento(D, indices_ao)
+        info = analizar_pesos(omega, nombres)
+        informe.extend(["  Raw fragment weights (Omega)", _formatear_matriz(omega, nombres),
+                        f"  Total weight: {info['total']:.8g}"])
+        P = info["fracciones"]
+        if P is None:
+            print("  CT fractions undefined because the total weight is zero.")
+            informe.append("  CT fractions undefined because the total weight is zero.")
         else:
-            print(f"    max T    = {s['max']:.6f}")
-        print(f"    P99      = {s['p99']:.6f}")
-        print(f"    P95      = {s['p95']:.6f}")
-        print(f"    P90      = {s['p90']:.6f}")
-        print(f"    P50      = {s['p50']:.6f}")
+            calculados += 1
+            metricas = f"  Lambda_CT = {info['Lambda_CT']:.6f} | LE = {info['peso_LE']:.6f}"
+            print(metricas)
+            informe.extend([metricas, "  Normalized fragment weights (P)", _formatear_matriz(P, nombres)])
+            par = info["par_dominante"]
+            if par is not None:
+                informe.append(f"  Dominant CT pair: {par[0]} → {par[1]} ({info['peso_dominante']:.6f})")
+            informe.append("  Electron–hole balance (fraction)")
+            for nombre, balance in zip(nombres, info["balance"]):
+                informe.append(f"    {nombre}: {balance:+.6f}")
 
-    # --- Elegir escala de color ---
-    op_escala = _pedir_opcion(
-        "\nColor scale to use in the heatmaps:",
-        {
-            "1": "Auto        (vmax = max|T|; rango completo)",
-            "2": "Percentile  (vmax = P99; satura outliers)",
-            "3": "Percentile  (vmax = P95; satura mas)",
-            "4": "Percentile  (vmax = P90; satura mucho)",
-            "5": "Manual      (escribes el vmax tu)",
-        },
-        default="1",
-    )
-
-    vmax_final_por_modo = {}
-    for modo in modos:
-        s = stats_por_modo[modo]
-        if not s:
-            vmax_final_por_modo[modo] = 1.0
-            continue
-        key_max = 'max_abs' if modo == "signed" else 'max'
-        if op_escala == "2":
-            vmax_final_por_modo[modo] = s['p99']
-        elif op_escala == "3":
-            vmax_final_por_modo[modo] = s['p95']
-        elif op_escala == "4":
-            vmax_final_por_modo[modo] = s['p90']
-        elif op_escala == "5":
+        identificador = f"{estado.espin}_{estado.indice}"
+        if exportar_ao:
             try:
-                v = float(input(
-                    f"  vmax for [{modo}] "
-                    f"(default {s[key_max]:.6f}): "
-                ).strip() or s[key_max])
-            except ValueError:
-                v = s[key_max]
-            vmax_final_por_modo[modo] = max(v, 1e-12)
-        else:
-            vmax_final_por_modo[modo] = s[key_max]
+                np.save(f"TDM_AO_{identificador}.npy", D)
+            except OSError as exc:
+                mensaje = f"Could not save AO matrix for {etiqueta}: {exc}"
+                print(mensaje, file=sys.stderr)
+                informe.append(mensaje)
+                fallos_salida = True
+        if P is not None:
+            try:
+                graficar_fracciones(P, nombres, f"CT_{identificador}.png")
+            except OSError as exc:
+                mensaje = f"Could not save CT plot for {etiqueta}: {exc}"
+                print(mensaje, file=sys.stderr)
+                informe.append(mensaje)
+                fallos_salida = True
 
-    print("\nFinal color scales:")
-    for modo, v in vmax_final_por_modo.items():
-        if modo == "signed":
-            print(f"  {modo:12s}  +/- {v:.6f}")
-        else:
-            print(f"  {modo:12s}  [0, {v:.6f}]")
-
-    # --- Escritura ---
-    output_filename = "monpy_results.txt"
-    buf = [LOGO, "\n\n",
-           "           MONpy: MO-based NDOL python\n\n",
-           INFO_BLOCK, "\n\n"]
-
-    buf.append(f"Input file: {archivo}\n")
-    buf.append(f"Atoms: {len(ndol.atomos)}\n")
-    buf.append(f"MO matrix: {ndol.C.shape[0]} AOs x {ndol.C.shape[1]} MOs\n")
-    if ndol.n_valencia_mo is not None:
-        buf.append(f"Valence orbitals: {ndol.n_valencia_mo} "
-                   f"({ndol.n_ocupados} occupied)\n")
-    buf.append(f"Fragments: {', '.join(nombres_frag)}\n")
-    buf.append(f"Fragment scheme: {esquema}\n")
-    buf.append(f"Numerical normalization: {normalizacion}\n")
-    buf.append(f"Plot modes: {', '.join(modos)}\n")
-    buf.append("Color scales:\n")
-    for modo, v in vmax_final_por_modo.items():
-        if modo == "signed":
-            buf.append(f"  {modo}: +/- {v:.6f}\n")
-        else:
-            buf.append(f"  {modo}: [0, {v:.6f}]\n")
-    buf.append("-" * 60 + "\n")
-
-    for estado, spin, M, info in resultados:
-        etiqueta = f"{spin.capitalize()} State {estado.indice}"
-        header = (f"\n{etiqueta}:  "
-                  f"E = {estado.energia_eV:.4f} eV, "
-                  f"f = {estado.f_osc:.4f}\n")
-
-        buf.append(header)
-        print(header.strip())
-
-        if M is None or info is None:
-            buf.append("  (not computed)\n")
-            continue
-
-        # --- Análisis automático ---
-        analisis_txt = _formatear_analisis(info, nombres_frag)
-        buf.append("\nAnalysis:\n")
-        buf.append(analisis_txt + "\n")
-        print(analisis_txt)
-
-        # --- Matriz completa en texto ---
-        buf.append(f"\nTransition Density Matrix "
-                   f"(scheme = {esquema}, "
-                   f"normalization = {normalizacion}):\n\n")
-        buf.append(_formatear_matriz(M, nombres_frag))
-        buf.append("\n" + "-" * 60 + "\n")
-
-        print(np.round(M, 3))
-
-        # --- Heatmaps (uno por modo) ---
-        for modo in modos:
-            nombre_png = (f"TDM_{spin}_S{estado.indice}"
-                          f"_{esquema}_{modo}.png")
-            graficar_matriz_densidad(
-                M,
-                vmax_global=vmax_final_por_modo[modo],
-                titulo="",
-                nombres=nombres_frag,
-                guardar=True,
-                filename=nombre_png,
-                modo=modo,
-            )
-
-    with open(output_filename, "w", encoding="utf-8") as f:
-        f.write("".join(buf))
-
-    print("\nHURRAY!!!")
-    print(f"Results saved to {output_filename}")
-    print("Images saved as TDM_<spin>_S<index>_<scheme>_<mode>.png")
+    try:
+        with open("monpy_results.txt", "w", encoding="utf-8") as salida:
+            salida.write("\n".join(informe) + "\n")
+    except OSError as exc:
+        print(f"Could not write monpy_results.txt: {exc}", file=sys.stderr)
+        return 1
+    print(f"CT calculated for {calculados}/{len(estados)} states. See monpy_results.txt.")
+    return int(fallos_salida or not calculados)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
