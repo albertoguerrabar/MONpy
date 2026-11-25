@@ -4,15 +4,14 @@ This case has 174 atoms split into two fragments of 87 atoms each. The ATOM
 numbers of the two molecules are interleaved. The TOML records the complete
 partition. Fragment A contains atom 1.
 
-Place the signed-CI NDOL output `CONTCAR_n2SD.ndo` next to `monpy.toml` and run
-the following from the repository root:
+Run the bundled signed-CI NDOL output from the repository root:
 
 ```bash
 python main.py --config examples/contcar_n2sd/monpy.toml
 ```
 
-The full NDOL output (about 51 MB) is distributed separately from the source
-tree when available. The configuration requires that output to run.
+The NDOL file is about 51 MB. The example uses `color_gamma = 0.5` to make
+small fragment contributions easier to see.
 
 | State | Energy (eV) | CT fraction | Character |
 | --- | ---: | ---: | --- |

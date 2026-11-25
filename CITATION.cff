@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use MONpy, please cite the software."
+title: "MONpy"
+type: software
+authors:
+  - given-names: Alberto
+    family-names: Guerra-Barroso
+  - given-names: Ana Lilian
+    family-names: Montero-Alejo
+abstract: "Python analysis of fragment-resolved electron–hole transition densities from NDOL excited-state output."
+keywords:
+  - excited states
+  - charge transfer
+  - transition density
+  - NDOL

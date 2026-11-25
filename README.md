@@ -50,7 +50,7 @@ python -m unittest discover -s tests
 
 ## Citation
 
-When reporting results obtained with MONpy, cite this repository and record the Git commit used for the calculation. The MONpy article reference and DOI are pending.
+When reporting results obtained with MONpy, cite this repository and record the Git commit used for the calculation. See [CITATION.cff](CITATION.cff) for citation metadata.
 
 ## License
 

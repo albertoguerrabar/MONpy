@@ -15,7 +15,7 @@ import math
 import re
 from os import PathLike
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple, Union
+from typing import Iterator, List, Optional, Tuple, Union
 
 import numpy as np
 
@@ -81,13 +81,27 @@ class TransicionCI:
         return float(np.sqrt(max(self.c2, 0.0)))
 
 
+@dataclass(slots=True)
+class _TransicionesVectorCI:
+    pares: tuple[tuple[int, int], ...]
+    amplitudes: np.ndarray
+
+    def __len__(self) -> int:
+        return len(self.pares)
+
+    def __iter__(self) -> Iterator[TransicionCI]:
+        for (i, a), valor in zip(self.pares, self.amplitudes):
+            amplitud = float(valor)
+            yield TransicionCI(i, a, amplitud**2, amplitud)
+
+
 @dataclass
 class EstadoCI:
     indice: int
     energia_eV: float
     f_osc: float                 # NaN si NDOL no lo informa
     espin: str                    # 'singlet' | 'triplet'
-    transiciones: List[TransicionCI] = field(default_factory=list)
+    transiciones: List[TransicionCI] | _TransicionesVectorCI = field(default_factory=list)
 
 
 @dataclass
@@ -289,6 +303,7 @@ def _parse_ci_vectors(
     cabeceras = [j for j in range(start, end) if _RE_CI_VECTOR.match(lines[j])]
     estados: dict[int, EstadoCI] = {}
     configuraciones: Optional[dict[int, tuple[int, int]]] = None
+    pares_ordenados: tuple[tuple[int, int], ...] = ()
     for principio, limite in zip(cabeceras, cabeceras[1:] + [end]):
         filas = iter((j + 1, lines[j].rstrip()) for j in range(principio + 1, limite)
                      if lines[j].strip())
@@ -337,13 +352,13 @@ def _parse_ci_vectors(
             raise ValueError(f"Línea {principio + 1}: pares de MO duplicados en el bloque CI")
         if configuraciones is None:
             configuraciones = pares
+            pares_ordenados = tuple(pares[k] for k in range(1, cantidad + 1))
         elif pares != configuraciones:
             raise ValueError(f"Línea {principio + 1}: configuraciones CI distintas entre bloques")
 
-        for k in sorted(pares):
-            i_mo, a_mo = pares[k]
-            for estado, amplitud in zip(bloque, coeficientes[k]):
-                estado.transiciones.append(TransicionCI(i_mo, a_mo, amplitud**2, amplitud))
+        amplitudes = np.array([coeficientes[k] for k in range(1, cantidad + 1)]).T.copy()
+        for estado, vector in zip(bloque, amplitudes):
+            estado.transiciones = _TransicionesVectorCI(pares_ordenados, vector)
         estados.update((estado.indice, estado) for estado in bloque)
 
     if tabla and estados.keys() != tabla.keys():
@@ -448,7 +463,10 @@ def _parse_ci_states(
 
 # ----------------------------- API pública --------------------------------
 
-def parse_ndol(source: Union[str, PathLike[str], bytes, List[str]]) -> NDOLOutput:
+def parse_ndol(
+    source: Union[str, PathLike[str], bytes, List[str]], *,
+    espines: tuple[str, ...] = ('singlet', 'triplet'),
+) -> NDOLOutput:
     """Parsea un archivo NDOL (path, bytes, o lista de líneas)."""
     lines = _read_ndol_lines(source)
 
@@ -460,15 +478,25 @@ def parse_ndol(source: Union[str, PathLike[str], bytes, List[str]]) -> NDOLOutpu
         raise ValueError(f"Número inválido de MO ocupados: {n_occ}")
 
     n_config = next((int(m[1]) for line in lines if (m := _RE_CI_N_CONFIG.search(line))), None)
-    estados_s = _parse_ci_states(lines, 'singlet', n_config)
-    estados_t = _parse_ci_states(lines, 'triplet', n_config)
+    estados_s = _parse_ci_states(lines, 'singlet', n_config) if 'singlet' in espines else []
+    estados_t = _parse_ci_states(lines, 'triplet', n_config) if 'triplet' in espines else []
+    pares_validados = set()
     for estado in estados_s + estados_t:
-        for t in estado.transiciones:
-            if (not 1 <= t.i < t.a <= C.shape[1]
-                    or (n_occ is not None and not t.i <= n_occ < t.a)):
+        transiciones = estado.transiciones
+        if isinstance(transiciones, _TransicionesVectorCI):
+            identificador = id(transiciones.pares)
+            if identificador in pares_validados:
+                continue
+            pares_validados.add(identificador)
+            pares = transiciones.pares
+        else:
+            pares = ((t.i, t.a) for t in transiciones)
+        for i, a in pares:
+            if (not 1 <= i < a <= C.shape[1]
+                    or (n_occ is not None and not i <= n_occ < a)):
                 raise ValueError(
                     f"CI {estado.espin} {estado.indice}: "
-                    f"transición MO ocupado → virtual inválida: {t.i} → {t.a}"
+                    f"transición MO ocupado → virtual inválida: {i} → {a}"
                 )
 
     return NDOLOutput(

@@ -42,11 +42,7 @@ INFO_BLOCK = """
 """
 
 
-CITATION_BLOCK = (
-    "How to cite MONpy\n"
-    "  Software repository (GitHub): [URL pending]\n"
-    "  Associated article: [bibliographic reference and DOI pending]"
-)
+CITATION_BLOCK = "Citation metadata is available in CITATION.cff."
 
 
 def _formatear_matriz(matriz: np.ndarray, nombres: list[str]) -> str:
@@ -98,13 +94,14 @@ def main() -> int:
     try:
         config = leer_configuracion(args.config) if args.config is not None else None
         archivo = config.ndol if config else args.ndol or input("NDOL input file: ").strip()
-        ndol = parse_ndol(archivo)
+        ndol = parse_ndol(archivo, espines=tuple(config.estados)) if config else parse_ndol(archivo)
     except (OSError, ValueError) as exc:
         print(f"Input error: {exc}", file=sys.stderr)
         return 1
 
     print(f"{len(ndol.atomos)} atoms | {ndol.n_ao} AOs × {ndol.n_mo} MOs")
     directorio = config.output_dir if config else Path.cwd()
+    color_gamma = config.color_gamma if config else 1.0
     informe = [LOGO, INFO_BLOCK, CITATION_BLOCK, "", f"Input file: {archivo}",
                f"Atoms: {len(ndol.atomos)} | AOs: {ndol.n_ao} | MOs: {ndol.n_mo}"]
     try:
@@ -146,7 +143,20 @@ def main() -> int:
                 fragmentos = definir_fragmentos(ndol.atomos)
                 indices_ao = construir_indices_ao_por_fragmento(ndol, fragmentos)
                 exportar_ao = input("Export signed AO matrices (.npy)? [y/N]: ").strip().lower() == "y"
+                while True:
+                    try:
+                        gamma = float(input("Color gamma (0.5 highlights small fractions) [1]: ").strip() or "1")
+                    except EOFError:
+                        break
+                    except ValueError:
+                        gamma = 0
+                    if np.isfinite(gamma) and gamma > 0:
+                        color_gamma = gamma
+                        break
+                    print("Enter a finite positive number.")
             informe.append(f"Effective NDOL AO basis: max |CᵀC − I| = {error_ortogonalidad:.3e}")
+            if color_gamma != 1.0:
+                informe.append(f"Plot color gamma: {color_gamma:g}")
     nombres = list(fragmentos)
     if nombres:
         informe.append("Rows: hole fragment. Columns: electron fragment.")
@@ -214,7 +224,9 @@ def main() -> int:
                 fallos_salida = True
         if P is not None:
             try:
-                graficar_fracciones(P, nombres, directorio / f"CT_{identificador}.png")
+                graficar_fracciones(
+                    P, nombres, directorio / f"CT_{identificador}.png", color_gamma=color_gamma,
+                )
             except OSError as exc:
                 mensaje = f"Could not save CT plot for {etiqueta}: {exc}"
                 print(mensaje, file=sys.stderr)

@@ -1,6 +1,7 @@
 ndol = "CONTCAR_n2SD.ndo"
 output_dir = "results"
 export_ao = false
+color_gamma = 0.5
 
 [states]
 singlet = [1, 9]

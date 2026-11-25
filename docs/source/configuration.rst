@@ -48,6 +48,7 @@ and uses the default of skipping AO matrix export.
    Fragment name 2: B
    ATOM numbers for 'B' (e.g. 1,3-6): 5-8
    Export signed AO matrices (.npy)? [y/N]: n
+   Color gamma (0.5 highlights small fractions) [1]: 1
 
 Continue with :doc:`outputs` for the file names and matrix conventions.
 
@@ -61,6 +62,7 @@ Save these settings as ``monpy.toml`` alongside ``acro.ndo``.
    ndol = "acro.ndo"
    output_dir = "results/acro"
    export_ao = false
+   color_gamma = 1.0
 
    [states]
    singlet = [1, 2]
@@ -79,3 +81,7 @@ NDOL state numbers. Set a spin to ``"all"`` to include every available state
 of that spin, or omit it to skip that spin. Fragment order determines matrix
 order. On Python 3.10, install ``tomli`` with ``python -m pip install tomli``.
 Python 3.11 and newer include a TOML reader.
+
+Use a positive ``color_gamma`` to control plot contrast. The default of 1
+is linear, and 0.5 highlights small fractions. The numerical outputs use the
+original fractions. Use the same gamma when comparing plots.

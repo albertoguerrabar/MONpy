@@ -5,17 +5,21 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize, PowerNorm
 import numpy as np
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 
 def graficar_fracciones(
     fracciones: np.ndarray, nombres: list[str], filename: str | Path,
+    *, color_gamma: float = 1.0,
 ) -> None:
+    norm = (Normalize(vmin=0, vmax=1) if color_gamma == 1
+            else PowerNorm(gamma=color_gamma, vmin=0, vmax=1))
     fig, ax = plt.subplots(figsize=(6, 6))
     try:
         imagen = ax.imshow(fracciones, cmap="viridis", interpolation="nearest",
-                           vmin=0, vmax=1, origin="upper", aspect="equal")
+                           norm=norm, origin="upper", aspect="equal")
         posiciones = range(len(nombres))
         ax.set_xticks(posiciones, nombres)
         ax.set_yticks(posiciones, nombres)

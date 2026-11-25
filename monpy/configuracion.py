@@ -1,5 +1,6 @@
 """Configuración de corridas no interactivas."""
 from dataclasses import dataclass
+import math
 from pathlib import Path
 
 from .ndol_parser import EstadoCI, NDOLOutput
@@ -12,6 +13,7 @@ class Configuracion:
     export_ao: bool
     estados: dict[str, list[int] | str]
     fragmentos: dict[str, str]
+    color_gamma: float = 1.0
 
 
 def leer_configuracion(ruta: Path) -> Configuracion:
@@ -27,7 +29,7 @@ def leer_configuracion(ruta: Path) -> Configuracion:
     with ruta.open("rb") as archivo:
         datos = tomllib.load(archivo)
 
-    desconocidas = datos.keys() - {"ndol", "output_dir", "export_ao", "states", "fragments"}
+    desconocidas = datos.keys() - {"ndol", "output_dir", "export_ao", "states", "fragments", "color_gamma"}
     if desconocidas:
         raise ValueError("Unknown configuration keys: " + ", ".join(sorted(desconocidas)))
 
@@ -41,6 +43,10 @@ def leer_configuracion(ruta: Path) -> Configuracion:
     export_ao = datos.get("export_ao", False)
     if not isinstance(export_ao, bool):
         raise ValueError("export_ao must be true or false.")
+
+    color_gamma = datos.get("color_gamma", 1.0)
+    if type(color_gamma) not in (int, float) or not math.isfinite(color_gamma) or color_gamma <= 0:
+        raise ValueError("color_gamma must be a finite positive number.")
 
     estados = datos.get("states")
     if not isinstance(estados, dict) or not estados or estados.keys() - {"singlet", "triplet"}:
@@ -59,7 +65,9 @@ def leer_configuracion(ruta: Path) -> Configuracion:
                    for nombre, valor in fragmentos.items())):
         raise ValueError('[fragments] must map fragment names to ATOM number strings, such as "1-4, 8".')
 
-    return Configuracion(rutas["ndol"], rutas["output_dir"], export_ao, estados, fragmentos)
+    return Configuracion(
+        rutas["ndol"], rutas["output_dir"], export_ao, estados, fragmentos, float(color_gamma),
+    )
 
 
 def seleccionar_estados(ndol: NDOLOutput, config: Configuracion) -> list[EstadoCI]:
