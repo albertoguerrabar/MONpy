@@ -1,5 +1,7 @@
 # MONpy
 
+**[Documentation →](https://albertoguerrabar.github.io/MONpy/)**
+
 MONpy (MO-based NDOL Python) analyzes electron–hole localization and charge transfer from NDOL excited-state calculations. It reconstructs the transition matrix in the atomic-orbital (AO) basis from signed CI amplitudes, then computes local excitation and charge-transfer weights for user-defined molecular fragments.
 
 ## Quick start
