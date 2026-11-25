@@ -1,7 +1,5 @@
 # MONpy
 
-**[Documentation →](https://albertoguerrabar.github.io/MONpy/)**
-
 MONpy (MO-based NDOL Python) analyzes electron–hole localization and charge transfer from NDOL excited-state calculations. It reconstructs the transition matrix in the atomic-orbital (AO) basis from signed CI amplitudes, then computes local excitation and charge-transfer weights for user-defined molecular fragments.
 
 ## Quick start
@@ -38,17 +36,7 @@ Rows represent the hole fragment and columns the electron fragment. The diagonal
 
 ## Documentation and examples
 
-- [User guide](docs/source/index.rst)
-- [Acrolein quick start](examples/acrolein/README.md)
-- [Large dimer example](examples/contcar_n2sd/README.md)
-
-Build the HTML guide and run the regression tests from the repository root:
-
-```bash
-python -m pip install sphinx
-python -m sphinx -W -n -b html docs/source docs/build/html
-python -m unittest discover -s tests
-```
+**[Documentation →](https://albertoguerrabar.github.io/MONpy/)**
 
 ## Citation
 
