@@ -4,7 +4,11 @@ Citing MONpy
 Software
 --------
 
-Identify the MONpy repository and record the commit used for the analysis.
+For MONpy v0.1.0, cite the archived software version.
+
+* A. Guerra-Barroso and A. L. Montero-Alejo, *MONpy*, v0.1.0, Zenodo.
+  `DOI 10.5281/zenodo.24521281 <https://doi.org/10.5281/zenodo.24521281>`_.
+
 The associated MONpy article reference and DOI are pending.
 
 * `MONpy source repository <https://github.com/albertoguerrabar/MONpy>`_

@@ -40,7 +40,7 @@ Rows represent the hole fragment and columns the electron fragment. The diagonal
 
 ## Citation
 
-When reporting results obtained with MONpy, cite this repository and record the Git commit used for the calculation. See [CITATION.cff](CITATION.cff) for citation metadata.
+If you used MONpy v0.1.0, cite the [Zenodo software record](https://doi.org/10.5281/zenodo.24521281). See [CITATION.cff](CITATION.cff) for citation metadata.
 
 ## License
 
